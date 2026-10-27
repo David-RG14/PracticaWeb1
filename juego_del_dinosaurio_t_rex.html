@@ -1,0 +1,745 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
+    <title>Chrome T-Rex Runner - Edición Retro</title>
+    <!-- Tailwind CSS para diseño adaptable del contenedor -->
+    <script src="https://cdn.tailwindcss.com"></script>
+    <style>
+        /* Importar fuente retro estilo 8-bit */
+        @import url('https://fonts.googleapis.com/css2?family=Press+Start+2P&display=swap');
+
+        * {
+            font-family: 'Press Start 2P', cursive, monospace;
+            user-select: none;
+            -webkit-user-select: none;
+            touch-action: manipulation;
+        }
+
+        /* Estilos generales para tema claro y oscuro */
+        body {
+            transition: background-color 0.5s ease, color 0.5s ease;
+            background-color: #f7f7f7;
+            color: #535353;
+        }
+
+        body.dark-mode {
+            background-color: #202124;
+            color: #e8eaed;
+        }
+
+        /* Canvas del juego */
+        #gameCanvas {
+            background-color: transparent;
+            display: block;
+            margin: 0 auto;
+            max-width: 100%;
+            height: auto;
+            border-bottom: 2px solid currentColor;
+        }
+
+        /* Botones táctiles para dispositivos móviles */
+        .touch-btn {
+            background-color: rgba(0, 0, 0, 0.05);
+            border: 2px solid #535353;
+            border-radius: 8px;
+            font-size: 12px;
+            padding: 12px;
+            text-align: center;
+            font-weight: bold;
+            active: background-color rgba(0, 0, 0, 0.2);
+        }
+
+        .dark-mode .touch-btn {
+            background-color: rgba(255, 255, 255, 0.05);
+            border-color: #e8eaed;
+        }
+    </style>
+</head>
+<body class="min-h-screen flex flex-col items-center justify-center p-4">
+
+    <!-- Contenedor Principal -->
+    <div class="w-full max-w-4xl flex flex-col items-center">
+        
+        <!-- Encabezado con Puntuación -->
+        <div class="w-full flex justify-between items-center mb-4 px-2 text-xs md:text-sm">
+            <div class="flex items-center gap-2">
+                <span class="font-bold uppercase tracking-wider">T-REX RUNNER</span>
+            </div>
+            <div id="scoreBoard" class="flex gap-4">
+                <span>HI <span id="highScore">00000</span></span>
+                <span><span id="currentScore">00000</span></span>
+            </div>
+        </div>
+
+        <!-- Canvas del Juego -->
+        <div class="relative w-full flex justify-center items-center overflow-hidden rounded-lg">
+            <canvas id="gameCanvas" width="800" height="250"></canvas>
+            
+            <!-- Pantalla de Inicio / Game Over overlay -->
+            <div id="overlay" class="absolute inset-0 flex flex-col items-center justify-center bg-transparent text-center p-4">
+                <h1 id="overlayTitle" class="text-xl md:text-2xl font-bold mb-4">T-REX RUNNER</h1>
+                <p id="overlaySub" class="text-xs md:text-sm mb-6 animate-pulse">Presiona ESPACIO o TOCA para Empezar</p>
+                <button id="restartBtn" class="hidden px-4 py-2 border-2 border-current rounded text-xs font-bold hover:opacity-80 transition-opacity">
+                    REINICIAR
+                </button>
+            </div>
+        </div>
+
+        <!-- Instrucciones y Controles -->
+        <div class="w-full mt-6 grid grid-cols-1 md:grid-cols-2 gap-4 text-xs opacity-80 text-center md:text-left">
+            <div class="bg-black/5 dark:bg-white/5 p-3 rounded-lg">
+                <p class="font-bold mb-1">🎮 Teclado:</p>
+                <p>[Espacio] / [▲] : Saltar / Iniciar</p>
+                <p>[▼] : Agacharse</p>
+            </div>
+            <div class="bg-black/5 dark:bg-white/5 p-3 rounded-lg">
+                <p class="font-bold mb-1">📱 Pantalla Táctil:</p>
+                <p>Mitad Superior : Saltar</p>
+                <p>Mitad Inferior : Agacharse</p>
+            </div>
+        </div>
+
+        <!-- Zonas táctiles invisibles/visibles para móviles -->
+        <div class="w-full grid grid-cols-2 gap-2 mt-4 md:hidden">
+            <button id="btnTouchJump" class="touch-btn">SALTAR ▲</button>
+            <button id="btnTouchDuck" class="touch-btn">AGACHARSE ▼</button>
+        </div>
+
+    </div>
+
+    <!-- LÓGICA DEL JUEGO -->
+    <script>
+        // ==========================================
+        // 1. SISTEMA DE AUDIO SINTETIZADO (Web Audio API)
+        // ==========================================
+        class SoundFX {
+            constructor() {
+                this.ctx = null;
+            }
+
+            init() {
+                if (!this.ctx) {
+                    const AudioContext = window.AudioContext || window.webkitAudioContext;
+                    if (AudioContext) {
+                        this.ctx = new AudioContext();
+                    }
+                }
+            }
+
+            playJump() {
+                if (!this.ctx) return;
+                const osc = this.ctx.createOscillator();
+                const gain = this.ctx.createGain();
+                osc.type = 'square';
+                osc.frequency.setValueAtTime(150, this.ctx.currentTime);
+                osc.frequency.exponentialRampToValueAtTime(400, this.ctx.currentTime + 0.1);
+                
+                gain.gain.setValueAtTime(0.15, this.ctx.currentTime);
+                gain.gain.exponentialRampToValueAtTime(0.01, this.ctx.currentTime + 0.1);
+
+                osc.connect(gain);
+                gain.connect(this.ctx.destination);
+
+                osc.start();
+                osc.stop(this.ctx.currentTime + 0.1);
+            }
+
+            playScorePoint() {
+                if (!this.ctx) return;
+                const osc = this.ctx.createOscillator();
+                const gain = this.ctx.createGain();
+                osc.type = 'square';
+                osc.frequency.setValueAtTime(600, this.ctx.currentTime);
+                osc.frequency.setValueAtTime(800, this.ctx.currentTime + 0.08);
+
+                gain.gain.setValueAtTime(0.15, this.ctx.currentTime);
+                gain.gain.exponentialRampToValueAtTime(0.01, this.ctx.currentTime + 0.25);
+
+                osc.connect(gain);
+                gain.connect(this.ctx.destination);
+
+                osc.start();
+                osc.stop(this.ctx.currentTime + 0.25);
+            }
+
+            playGameOver() {
+                if (!this.ctx) return;
+                const osc = this.ctx.createOscillator();
+                const gain = this.ctx.createGain();
+                osc.type = 'sawtooth';
+                osc.frequency.setValueAtTime(120, this.ctx.currentTime);
+                osc.frequency.exponentialRampToValueAtTime(40, this.ctx.currentTime + 0.3);
+
+                gain.gain.setValueAtTime(0.2, this.ctx.currentTime);
+                gain.gain.exponentialRampToValueAtTime(0.01, this.ctx.currentTime + 0.3);
+
+                osc.connect(gain);
+                gain.connect(this.ctx.destination);
+
+                osc.start();
+                osc.stop(this.ctx.currentTime + 0.3);
+            }
+        }
+
+        const sound = new SoundFX();
+
+        // ==========================================
+        // 2. CONFIGURACIÓN Y VARIABLES DEL CANAL
+        // ==========================================
+        const canvas = document.getElementById('gameCanvas');
+        const ctx = canvas.getContext('2d');
+
+        const currentScoreEl = document.getElementById('currentScore');
+        const highScoreEl = document.getElementById('highScore');
+        const overlay = document.getElementById('overlay');
+        const overlayTitle = document.getElementById('overlayTitle');
+        const overlaySub = document.getElementById('overlaySub');
+        const restartBtn = document.getElementById('restartBtn');
+
+        const CANVAS_WIDTH = 800;
+        const CANVAS_HEIGHT = 250;
+        const GROUND_Y = 210;
+
+        let gameState = 'START'; // 'START', 'PLAYING', 'GAMEOVER'
+        let gameSpeed = 6;
+        let score = 0;
+        let highScore = parseInt(localStorage.getItem('trex_high_score') || '0', 10);
+        let frameCount = 0;
+        let isDarkMode = false;
+        let colorTheme = '#535353';
+
+        highScoreEl.textContent = String(highScore).padStart(5, '0');
+
+        // ==========================================
+        // 3. SPRITES DIBUJADOS MEDIANTE CANVAS (Pixel Art)
+        // ==========================================
+
+        // T-Rex Character
+        class Dinosaur {
+            constructor() {
+                this.x = 50;
+                this.y = GROUND_Y - 44;
+                this.width = 44;
+                this.height = 47;
+                this.velocityY = 0;
+                this.gravity = 0.6;
+                this.jumpStrength = -11.5;
+                this.isGrounded = true;
+                this.isDucking = false;
+                this.animFrame = 0;
+                this.animTimer = 0;
+            }
+
+            jump() {
+                if (this.isGrounded && !this.isDucking) {
+                    this.velocityY = this.jumpStrength;
+                    this.isGrounded = false;
+                    sound.playJump();
+                }
+            }
+
+            duck(ducking) {
+                if (this.isGrounded) {
+                    this.isDucking = ducking;
+                    if (ducking) {
+                        this.width = 55;
+                        this.height = 26;
+                        this.y = GROUND_Y - 26;
+                    } else {
+                        this.width = 44;
+                        this.height = 47;
+                        this.y = GROUND_Y - 47;
+                    }
+                }
+            }
+
+            update() {
+                // Aplicar Gravedad
+                this.velocityY += this.gravity;
+                this.y += this.velocityY;
+
+                // Colisión con el Suelo
+                const currentHeight = this.isDucking ? 26 : 47;
+                if (this.y >= GROUND_Y - currentHeight) {
+                    this.y = GROUND_Y - currentHeight;
+                    this.velocityY = 0;
+                    this.isGrounded = true;
+                }
+
+                // Animación de correr
+                this.animTimer++;
+                if (this.animTimer % 6 === 0) {
+                    this.animFrame = (this.animFrame + 1) % 2;
+                }
+            }
+
+            draw() {
+                ctx.fillStyle = colorTheme;
+
+                if (!this.isDucking) {
+                    // T-Rex De Pie (Normal)
+                    const x = this.x;
+                    const y = this.y;
+
+                    // Cabeza y Hocico
+                    ctx.fillRect(x + 22, y, 20, 16);
+                    ctx.fillRect(x + 36, y + 4, 6, 4); // Ojo (espacio vacío)
+                    ctx.clearRect(x + 30, y + 2, 4, 4); // Ojo en blanco
+
+                    // Cuerpo y Brazos
+                    ctx.fillRect(x + 10, y + 14, 24, 18);
+                    ctx.fillRect(x + 32, y + 20, 6, 2); // Brazo
+
+                    // Cola
+                    ctx.fillRect(x, y + 16, 12, 10);
+                    ctx.fillRect(x + 4, y + 26, 8, 6);
+
+                    // Piernas
+                    if (!this.isGrounded) {
+                        // Salto: Patas juntas
+                        ctx.fillRect(x + 14, y + 32, 6, 12);
+                        ctx.fillRect(x + 24, y + 32, 6, 12);
+                    } else {
+                        // Carrera animada
+                        if (this.animFrame === 0) {
+                            ctx.fillRect(x + 14, y + 32, 6, 15);
+                            ctx.fillRect(x + 24, y + 32, 10, 6);
+                        } else {
+                            ctx.fillRect(x + 14, y + 32, 10, 6);
+                            ctx.fillRect(x + 24, y + 32, 6, 15);
+                        }
+                    }
+                } else {
+                    // T-Rex Agachado
+                    const x = this.x;
+                    const y = this.y;
+
+                    // Cuerpo horizontal
+                    ctx.fillRect(x, y + 8, 45, 14);
+                    ctx.fillRect(x + 40, y + 2, 15, 14); // Cabeza
+                    ctx.clearRect(x + 48, y + 4, 3, 3);  // Ojo
+
+                    // Cola
+                    ctx.fillRect(x - 8, y + 8, 10, 6);
+
+                    // Piernas agachado
+                    if (this.animFrame === 0) {
+                        ctx.fillRect(x + 12, y + 20, 8, 6);
+                        ctx.fillRect(x + 28, y + 20, 10, 4);
+                    } else {
+                        ctx.fillRect(x + 12, y + 20, 10, 4);
+                        ctx.fillRect(x + 28, y + 20, 8, 6);
+                    }
+                }
+            }
+
+            getHitbox() {
+                // Margen de colisión preciso (reducción leve para ser justo)
+                const padding = 4;
+                return {
+                    x: this.x + padding,
+                    y: this.y + padding,
+                    width: this.width - (padding * 2),
+                    height: this.height - (padding * 2)
+                };
+            }
+        }
+
+        // Cactus Obstacle
+        class Cactus {
+            constructor(type, speed) {
+                this.type = type; // 0: Pequeño, 1: Grande, 2: Grupo
+                this.speed = speed;
+                this.x = CANVAS_WIDTH + 20;
+
+                if (type === 0) { // Pequeño
+                    this.width = 16;
+                    this.height = 35;
+                } else if (type === 1) { // Grande
+                    this.width = 24;
+                    this.height = 50;
+                } else { // Grupo de Cactus
+                    this.width = 45;
+                    this.height = 40;
+                }
+
+                this.y = GROUND_Y - this.height;
+            }
+
+            update() {
+                this.x -= this.speed;
+            }
+
+            draw() {
+                ctx.fillStyle = colorTheme;
+                const x = this.x;
+                const y = this.y;
+
+                if (this.type === 0) {
+                    // Cactus individual pequeño
+                    ctx.fillRect(x + 5, y, 6, this.height);
+                    ctx.fillRect(x, y + 10, 5, 12);
+                    ctx.fillRect(x + 11, y + 15, 5, 10);
+                } else if (this.type === 1) {
+                    // Cactus individual grande
+                    ctx.fillRect(x + 8, y, 8, this.height);
+                    ctx.fillRect(x, y + 12, 8, 18);
+                    ctx.fillRect(x + 16, y + 20, 8, 14);
+                } else {
+                    // Grupo de Cactus
+                    ctx.fillRect(x + 4, y + 5, 6, 35);
+                    ctx.fillRect(x + 18, y, 8, 40);
+                    ctx.fillRect(x + 32, y + 10, 6, 30);
+                }
+            }
+
+            getHitbox() {
+                return {
+                    x: this.x + 2,
+                    y: this.y + 2,
+                    width: this.width - 4,
+                    height: this.height - 2
+                };
+            }
+        }
+
+        // Pterodactyl (Pájaro volador)
+        class Pterodactyl {
+            constructor(speed) {
+                this.x = CANVAS_WIDTH + 20;
+                this.width = 42;
+                this.height = 30;
+                this.speed = speed;
+                
+                // Alturas: 0 = Bajo (requiere agacharse), 1 = Medio (saltar), 2 = Alto (se puede pasar caminando)
+                const heights = [GROUND_Y - 28, GROUND_Y - 52, GROUND_Y - 75];
+                this.y = heights[Math.floor(Math.random() * heights.length)];
+                
+                this.animFrame = 0;
+                this.animTimer = 0;
+            }
+
+            update() {
+                this.x -= this.speed + 0.5; // Vuela ligeramente más rápido
+                this.animTimer++;
+                if (this.animTimer % 12 === 0) {
+                    this.animFrame = (this.animFrame + 1) % 2;
+                }
+            }
+
+            draw() {
+                ctx.fillStyle = colorTheme;
+                const x = this.x;
+                const y = this.y;
+
+                // Cuerpo
+                ctx.fillRect(x + 12, y + 10, 18, 8);
+                // Cabeza y pico
+                ctx.fillRect(x, y + 8, 12, 6);
+                ctx.fillRect(x - 4, y + 10, 4, 3);
+                // Cola
+                ctx.fillRect(x + 30, y + 12, 8, 4);
+
+                // Alas Animadas
+                if (this.animFrame === 0) {
+                    // Alas hacia arriba
+                    ctx.fillRect(x + 14, y - 6, 8, 16);
+                    ctx.fillRect(x + 18, y - 12, 4, 6);
+                } else {
+                    // Alas hacia abajo
+                    ctx.fillRect(x + 14, y + 18, 8, 12);
+                    ctx.fillRect(x + 18, y + 30, 4, 4);
+                }
+            }
+
+            getHitbox() {
+                return {
+                    x: this.x + 4,
+                    y: this.y + 4,
+                    width: this.width - 8,
+                    height: this.height - 8
+                };
+            }
+        }
+
+        // Nubes de Fondo
+        class Cloud {
+            constructor() {
+                this.x = CANVAS_WIDTH + Math.random() * 100;
+                this.y = 30 + Math.random() * 60;
+                this.width = 46;
+                this.speed = 1;
+            }
+
+            update() {
+                this.x -= this.speed;
+            }
+
+            draw() {
+                ctx.fillStyle = colorTheme;
+                ctx.globalAlpha = 0.4; // Nubes traslúcidas
+                ctx.fillRect(this.x, this.y, 46, 12);
+                ctx.fillRect(this.x + 10, this.y - 6, 24, 6);
+                ctx.fillRect(this.x + 6, this.y + 12, 32, 4);
+                ctx.globalAlpha = 1.0;
+            }
+        }
+
+        // Textura del Suelo Infinito
+        class Ground {
+            constructor() {
+                this.x = 0;
+                this.bumpPattern = [];
+                for (let i = 0; i < 100; i++) {
+                    this.bumpPattern.push({
+                        x: Math.random() * CANVAS_WIDTH * 2,
+                        size: Math.random() > 0.5 ? 2 : 1
+                    });
+                }
+            }
+
+            update(speed) {
+                this.x -= speed;
+                if (this.x <= -CANVAS_WIDTH) {
+                    this.x = 0;
+                }
+            }
+
+            draw() {
+                ctx.fillStyle = colorTheme;
+                // Línea principal
+                ctx.fillRect(0, GROUND_Y, CANVAS_WIDTH, 2);
+
+                // Pequeños puntos y detalles en el suelo
+                for (let bump of this.bumpPattern) {
+                    let posX = (bump.x + this.x) % CANVAS_WIDTH;
+                    if (posX < 0) posX += CANVAS_WIDTH;
+                    ctx.fillRect(posX, GROUND_Y + 6 + (bump.size * 2), bump.size * 2, bump.size);
+                }
+            }
+        }
+
+        // ==========================================
+        // 4. GESTIÓN DEL JUEGO Y BUCLE PRINCIPAL
+        // ==========================================
+        let dino = new Dinosaur();
+        let ground = new Ground();
+        let obstacles = [];
+        let clouds = [];
+        let spawnTimer = 0;
+
+        function resetGame() {
+            dino = new Dinosaur();
+            obstacles = [];
+            clouds = [];
+            score = 0;
+            gameSpeed = 6;
+            frameCount = 0;
+            spawnTimer = 0;
+            isDarkMode = false;
+            document.body.classList.remove('dark-mode');
+            colorTheme = '#535353';
+            gameState = 'PLAYING';
+
+            overlay.classList.add('hidden');
+            restartBtn.classList.add('hidden');
+        }
+
+        function checkCollision(box1, box2) {
+            return (
+                box1.x < box2.x + box2.width &&
+                box1.x + box1.width > box2.x &&
+                box1.y < box2.y + box2.height &&
+                box1.y + box1.height > box2.y
+            );
+        }
+
+        function handleDayNightCycle() {
+            // Alternar modo día/noche cada 500 puntos
+            if (score > 0 && score % 500 === 0 && frameCount % 60 === 0) {
+                isDarkMode = !isDarkMode;
+                if (isDarkMode) {
+                    document.body.classList.add('dark-mode');
+                    colorTheme = '#e8eaed';
+                } else {
+                    document.body.classList.remove('dark-mode');
+                    colorTheme = '#535353';
+                }
+            }
+        }
+
+        function gameOver() {
+            gameState = 'GAMEOVER';
+            sound.playGameOver();
+
+            if (score > highScore) {
+                highScore = score;
+                localStorage.setItem('trex_high_score', highScore);
+                highScoreEl.textContent = String(highScore).padStart(5, '0');
+            }
+
+            overlayTitle.textContent = "GAME OVER";
+            overlaySub.textContent = "¡Has chocado!";
+            overlay.classList.remove('hidden');
+            restartBtn.classList.remove('hidden');
+        }
+
+        function gameLoop() {
+            // Limpieza del lienzo
+            ctx.clearRect(0, 0, CANVAS_WIDTH, CANVAS_HEIGHT);
+
+            if (gameState === 'PLAYING') {
+                frameCount++;
+                
+                // Incrementar puntuación gradualmente
+                if (frameCount % 5 === 0) {
+                    score++;
+                    currentScoreEl.textContent = String(score).padStart(5, '0');
+
+                    // Sonido cada 100 puntos
+                    if (score % 100 === 0 && score > 0) {
+                        sound.playScorePoint();
+                    }
+
+                    // Aumento progresivo de la velocidad del juego
+                    if (score % 150 === 0 && gameSpeed < 13) {
+                        gameSpeed += 0.5;
+                    }
+                }
+
+                handleDayNightCycle();
+
+                // Actualizar Dino
+                dino.update();
+
+                // Generar Nubes
+                if (Math.random() < 0.008) {
+                    clouds.push(new Cloud());
+                }
+
+                // Generar Obstáculos
+                spawnTimer++;
+                if (spawnTimer > Math.max(50, 100 - (gameSpeed * 3))) {
+                    if (Math.random() < 0.7) {
+                        // Cactus (pequeño, grande o grupo)
+                        const type = Math.floor(Math.random() * 3);
+                        obstacles.push(new Cactus(type, gameSpeed));
+                    } else if (score > 150) {
+                        // Pterodáctilos (aparecen a partir de 150 puntos)
+                        obstacles.push(new Pterodactyl(gameSpeed));
+                    }
+                    spawnTimer = 0;
+                }
+
+                // Actualizar e interactuar con Suelo y Nubes
+                ground.update(gameSpeed);
+                clouds.forEach(c => c.update());
+                clouds = clouds.filter(c => c.x + c.width > 0);
+
+                // Actualizar Obstáculos y verificar colisiones
+                for (let i = obstacles.length - 1; i >= 0; i--) {
+                    let obs = obstacles[i];
+                    obs.update();
+
+                    if (checkCollision(dino.getHitbox(), obs.getHitbox())) {
+                        gameOver();
+                    }
+
+                    // Eliminar obstáculos fuera de pantalla
+                    if (obs.x + obs.width < 0) {
+                        obstacles.splice(i, 1);
+                    }
+                }
+            }
+
+            // Dibujar Todos los Elementos
+            clouds.forEach(c => c.draw());
+            ground.draw();
+            dino.draw();
+            obstacles.forEach(o => o.draw());
+
+            requestAnimationFrame(gameLoop);
+        }
+
+        // ==========================================
+        // 5. CONTROLADORES DE EVENTOS (Teclado y Táctil)
+        // ==========================================
+        function handleJumpStart() {
+            sound.init();
+            if (gameState === 'START' || gameState === 'GAMEOVER') {
+                resetGame();
+            } else if (gameState === 'PLAYING') {
+                dino.jump();
+            }
+        }
+
+        function handleDuckStart() {
+            if (gameState === 'PLAYING') {
+                dino.duck(true);
+            }
+        }
+
+        function handleDuckEnd() {
+            if (gameState === 'PLAYING') {
+                dino.duck(false);
+            }
+        }
+
+        // Teclado
+        window.addEventListener('keydown', (e) => {
+            if (e.code === 'Space' || e.code === 'ArrowUp') {
+                e.preventDefault();
+                handleJumpStart();
+            } else if (e.code === 'ArrowDown') {
+                e.preventDefault();
+                handleDuckStart();
+            }
+        });
+
+        window.addEventListener('keyup', (e) => {
+            if (e.code === 'ArrowDown') {
+                handleDuckEnd();
+            }
+        });
+
+        // Eventos Táctiles / Touch Screen sobre el Canvas
+        canvas.addEventListener('touchstart', (e) => {
+            e.preventDefault();
+            const rect = canvas.getBoundingClientRect();
+            const touchY = e.touches[0].clientY - rect.top;
+
+            // Tocar mitad superior para saltar, mitad inferior para agacharse
+            if (touchY < rect.height / 2) {
+                handleJumpStart();
+            } else {
+                handleDuckStart();
+            }
+        }, { passive: false });
+
+        canvas.addEventListener('touchend', (e) => {
+            e.preventDefault();
+            handleDuckEnd();
+        }, { passive: false });
+
+        // Botones Táctiles en pantalla para Móviles
+        const btnJump = document.getElementById('btnTouchJump');
+        const btnDuck = document.getElementById('btnTouchDuck');
+
+        btnJump.addEventListener('touchstart', (e) => { e.preventDefault(); handleJumpStart(); });
+        btnDuck.addEventListener('touchstart', (e) => { e.preventDefault(); handleDuckStart(); });
+        btnDuck.addEventListener('touchend', (e) => { e.preventDefault(); handleDuckEnd(); });
+
+        restartBtn.addEventListener('click', () => {
+            sound.init();
+            resetGame();
+        });
+
+        // Iniciar bucle del juego al cargar
+        window.onload = () => {
+            requestAnimationFrame(gameLoop);
+        };
+    </script>
+</body>
+</html>
